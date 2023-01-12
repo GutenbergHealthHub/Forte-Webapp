@@ -1,0 +1,258 @@
+kind: Template
+apiVersion: template.openshift.io/v1
+metadata:
+    name: forte-webapp-template
+    annotations:
+        description: 'Template for the set up of the FORTE webapp'
+        tags: 'compass,nodejs,frontend,webapp,stencil'
+objects:
+    - kind: ConfigMap
+      apiVersion: v1
+      metadata:
+          name: forte-webapp-env
+          labels:
+              app: forte-webapp
+              app.kubernetes.io/component: forte-webapp
+              app.kubernetes.io/name: ${APP_NAME}
+              app.kubernetes.io/instance: ${APP_NAME}-${INSTANCE_IDENTIFIER}
+              app.kubernetes.io/part-of: ${HIGH_LVL_APP_NAME}
+      data:
+          API_BASE_URL: ${BACKEND_ROUTE}
+    - kind: ImageStream
+      apiVersion: image.openshift.io/v1
+      metadata:
+        name: nginx
+      spec:
+        lookupPolicy: 
+          local: false
+        tags:
+        - name: latest
+          from:
+            kind: DockerImage
+            name: bitnami/nginx:latest
+          referencePolicy:
+            type: source
+    - kind: ImageStream
+      apiVersion: image.openshift.io/v1
+      metadata:
+        labels:
+          app: ${APP_NAME}
+          app.kubernetes.io/name: ${APP_NAME}
+          app.kubernetes.io/instance: ${APP_NAME}-${INSTANCE_IDENTIFIER}
+      name: ${APP_NAME}
+      spec:
+        lookupPolicy:
+          local: false
+    - kind: BuildConfig
+      apiVersion: image.openshift.io/v1
+      metadata:
+        labels:
+          app: ${APP_NAME}
+          annotations:
+              app.openshift.io/vcs-ref: ${GIT_BRANCH}
+              app.openshift.io/vcs-uri: ${APP_GIT_URL}
+          labels:
+              app: forte-webapp
+              app.kubernetes.io/component: forte-webapp
+              app.kubernetes.io/name: ${APP_NAME}
+              app.kubernetes.io/instance: ${APP_NAME}-${INSTANCE_IDENTIFIER}
+              app.kubernetes.io/part-of: ${HIGH_LVL_APP_NAME}
+              app.openshift.io/runtime: nginx
+              app.openshift.io/runtime-version: latest
+      spec:
+          nodeSelector: null
+          output:
+              to:
+                  kind: ImageStreamTag
+                  name: forte-webapp:${ENV}
+          resources: {}
+          successfulBuildsHistoryLimit: 5
+          failedBuildsHistoryLimit: 5
+          strategy:
+              type: Docker
+              dockerStrategy:
+                from:
+                  kind: ImageStreamTag
+                  name: 'nginx:latest'
+          postCommit: {}
+          source:
+              type: Git
+              git:
+                  uri: ${APP_GIT_URL}
+                  ref: ${GIT_BRANCH}
+              contextDir: /
+              sourceSecret:
+                  name: mobile-backend-git-access-cert
+          triggers:
+              - type: Generic
+                generic:
+                    secretReference:
+                        name: mobile-backend-generic-webhook-secret
+              - type: GitLab
+                gitlab:
+                    secretReference:
+                        name: mobile-backend-gitlab-webhook-secret
+              - type: GitHub
+                github:
+                    secretReference:
+                        name: mobile-backend-github-webhook-secret
+              - type: ConfigChange
+          runPolicy: Serial
+    - kind: DeploymentConfig
+      apiVersion: apps.openshift.io/v1
+      metadata:
+          annotations:
+              app.openshift.io/vcs-uri: ${APP_GIT_URL}
+          name: forte-webapp
+          labels:
+              app: forte-webapp
+              app.kubernetes.io/component: forte-webapp
+              app.kubernetes.io/name: ${APP_NAME}
+              app.kubernetes.io/instance: ${APP_NAME}-${INSTANCE_IDENTIFIER}
+              app.kubernetes.io/part-of: ${HIGH_LVL_APP_NAME}
+              app.openshift.io/runtime: nginx
+              app.openshift.io/runtime-version: latest
+      spec:
+          strategy:
+              type: Rolling
+              rollingParams:
+                  updatePeriodSeconds: 1
+                  intervalSeconds: 1
+                  timeoutSeconds: 600
+                  maxUnavailable: 25%
+                  maxSurge: 25%
+              resources: {}
+              activeDeadlineSeconds: 21600
+          triggers:
+              - type: ImageChange
+                imageChangeParams:
+                    automatic: true
+                    containerNames:
+                        - forte-webapp
+                    from:
+                        kind: ImageStreamTag
+                        name: 'forte-webapp:${ENV}'
+              - type: ConfigChange
+          replicas: 1
+          revisionHistoryLimit: 10
+          test: false
+          selector:
+              app: forte-webapp
+              deploymentconfig: forte-webapp
+          template:
+              metadata:
+                  labels:
+                      app: forte-webapp
+                      deploymentconfig: forte-webapp
+              spec:
+                  containers:
+                      - name: forte-webapp
+                        ports:
+                            - containerPort: 8080
+                              protocol: TCP
+                        envFrom:
+                            - secretRef:
+                                  name: forte-webapp-signing-key-pair
+                            - configMapRef:
+                                  name: forte-webapp-env
+                        resources: {}
+                        readinessProbe:
+                            httpGet:
+                                path: /health
+                                port: 8080
+                                scheme: HTTP
+                            timeoutSeconds: 1
+                            periodSeconds: 10
+                            successThreshold: 1
+                            failureThreshold: 3
+                        terminationMessagePath: /dev/termination-log
+                        terminationMessagePolicy: File
+                        imagePullPolicy: Always
+                  restartPolicy: Always
+                  terminationGracePeriodSeconds: 30
+                  dnsPolicy: ClusterFirst
+                  securityContext: {}
+                  schedulerName: default-scheduler
+    - kind: Service
+      apiVersion: v1
+      metadata:
+          name: forte-webapp
+          labels:
+              app: forte-webapp
+              app.kubernetes.io/component: forte-webapp
+              app.kubernetes.io/name: ${APP_NAME}
+              app.kubernetes.io/instance: ${APP_NAME}-${INSTANCE_IDENTIFIER}
+              app.kubernetes.io/part-of: ${HIGH_LVL_APP_NAME}
+      spec:
+          ports:
+              - name: 8080-tcp
+                protocol: TCP
+                port: 8080
+                targetPort: 3
+          selector:
+              app: forte-webapp
+              deploymentconfig: forte-webapp
+          type: ClusterIP
+          sessionAffinity: None
+    - kind: Route
+      apiVersion: v1
+      metadata:
+          name: forte-webapp
+          labels:
+              app: forte-webapp
+              app.kubernetes.io/component: forte-webapp
+              app.kubernetes.io/name: ${APP_NAME}
+              app.kubernetes.io/instance: ${APP_NAME}-${INSTANCE_IDENTIFIER}
+              app.kubernetes.io/part-of: ${HIGH_LVL_APP_NAME}
+      spec:
+          to:
+              kind: Service
+              name: forte-webapp
+              weight: 100
+          port:
+              targetPort: 8080-tcp
+          tls:
+              termination: edge
+              insecureEdgeTerminationPolicy: Redirect
+          wildcardPolicy: None
+parameters:
+    - name: APP_GIT_URL
+      description: The Git URL of the application source code
+      required: 
+    - name: ENV
+      description: Name of the environment
+      value: prod
+    - name: APP_NAME
+      description: Name of the application
+      value: forte-webapp
+    - name: VOLUME_CAPACITY
+      description: Volume space available for data, e.g. 512Mi, 2Gi.
+      displayName: Volume Capacity
+      required: true
+      value: 1Gi
+    - name: BACKEND_ROUTE
+      description: route to the backend
+      displayName: Backend Route
+      required: true
+    - name: GIT_BRANCH
+      description: The Git branch that should be used for new builds
+      value: main
+    - name: GENERIC_WEBHOOK_SECRET
+      description: Secret for generic webhook
+      generate: expression
+      from: '[a-zA-Z0-9]{16}'
+    - name: GITHUB_WEBHOOK_SECRET
+      description: Secret for GitHub webhook
+      generate: expression
+      from: '[a-zA-Z0-9]{16}'
+    - name: GITLAB_WEBHOOK_SECRET
+      description: Secret for GitLab webhook
+      generate: expression
+      from: '[a-zA-Z0-9]{16}'
+    - name: HIGH_LVL_APP_NAME
+      description: Name of the higher level application that a resource is part of
+      value: FORTE
+    - name: INSTANCE_IDENTIFIER
+      description: Unique identifier for resources
+      generate: expression
+      from: '[a-zA-Z0-9]{5}'
